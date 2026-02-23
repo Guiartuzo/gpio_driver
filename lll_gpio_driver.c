@@ -6,6 +6,7 @@
 #include <linux/slab.h>
 
 #include <asm/io.h>
+#include <linux/gpio/consumer.h>
 
 #define LLL_MAX_USER_SIZE 1024
 
