@@ -1,130 +1,111 @@
-#include <linux/kernel.h>
-#include <linux/init.h>
 #include <linux/module.h>
-
-#include <linux/proc_fs.h>
-#include <linux/slab.h>
-
-#include <asm/io.h>
+#include <linux/platform_device.h>
 #include <linux/gpio/consumer.h>
+#include <linux/of.h>
+#include <linux/proc_fs.h>
 
-#define LLL_MAX_USER_SIZE 1024
+/*************************************************************************************************/
 
-#define GPIO_ADDRESS 0x3F200000
-
-static struct proc_dir_entry *lll_proc = NULL;
-
-static char data_buffer[LLL_MAX_USER_SIZE+1] = {0};
-
-static unsigned int *gpio_registers = NULL;
-
-static void gpio_pin_on(unsigned int pin)
-{
-	unsigned int fsel_index = pin/10;
-	unsigned int fsel_bitpos = pin%10;
-	unsigned int* gpio_fsel = gpio_registers + fsel_index;
-	unsigned int* gpio_on_register = (unsigned int*)((char*)gpio_registers + 0x1c);
-
-	*gpio_fsel &= ~(7 << (fsel_bitpos*3));
-	*gpio_fsel |= (1 << (fsel_bitpos*3));
-	*gpio_on_register |= (1 << pin);
-
-	return;
-}
-
-static void gpio_pin_off(unsigned int pin)
-{
-	unsigned int *gpio_off_register = (unsigned int*)((char*)gpio_registers + 0x28);
-	*gpio_off_register |= (1<<pin);
-	return;
-}
-
-ssize_t lll_read(struct file *file, char __user *user, size_t size, loff_t *off)
-{
-	return copy_to_user(user,"Hello!\n", 7) ? 0 : 7;
-}
-
-ssize_t lll_write(struct file *file, const char __user *user, size_t size, loff_t *off)
-{
-	unsigned int pin = UINT_MAX;
-	unsigned int value = UINT_MAX;
-
-	memset(data_buffer, 0x0, sizeof(data_buffer));
-
-	if (size > LLL_MAX_USER_SIZE) {
-		size = LLL_MAX_USER_SIZE;
-	}
-
-	if (copy_from_user(data_buffer, user, size))
-		return 0;
-
-	printk("Data buffer: %s\n", data_buffer);
-
-	if (sscanf(data_buffer, "%d,%d", &pin, &value) != 2) {
-		printk("Inproper data format submitted\n");
-		return size;
-	}
-
-	if (pin > 21 || pin < 0) {
-		printk("Invalid pin number submitted\n");
-		return size;
-	}
-
-	if (value != 0 && value != 1) {
-		printk("Invalid on/off value\n");
-		return size;
-	}
-
-	printk("You said pin %d, value %d\n", pin, value);
-	if (value == 1) {
-		gpio_pin_on(pin);
-	} else if (value == 0) {
-		gpio_pin_off(pin);
-	}
-
-	return size;
-}
-
-static const struct proc_ops lll_proc_fops = 
-{
-	.proc_read = lll_read,
-	.proc_write = lll_write,
+struct raspzero_data {
+	struct gpio_desc *led;
 };
 
+/*************************************************************************************************/
 
-static int __init gpio_driver_init(void)
+static ssize_t led_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	printk("Welcome to my driver!\n");
-	
-	gpio_registers = (int*)ioremap(GPIO_ADDRESS, PAGE_SIZE);
-	if (gpio_registers == NULL) {
-		printk("Failed to map GPIO memory to driver\n");
-		return -1;
-	}
-	
-	printk("Successfully mapped in GPIO memory\n");
-	
-	// create an entry in the proc-fs
-	lll_proc = proc_create("lll-gpio", 0666, NULL, &lll_proc_fops);
-	if (lll_proc == NULL) {
-		return -1;
+	struct raspzero_data *data = dev_get_drvdata(dev);
+	return sprintf(buf, "gpio value: %d\n", gpiod_get_value(data->led));
+}
+
+/*************************************************************************************************/
+
+static ssize_t led_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct raspzero_data *data = dev_get_drvdata(dev);
+	int val;
+
+	if (kstrtoint(buf, 0, &val)) {
+		return -EINVAL;
 	}
 
+	gpiod_set_value(data->led, val ? 1 : 0);
+	return count;
+}
+
+/*************************************************************************************************/
+
+static DEVICE_ATTR(led, 0664, led_show, led_store);
+
+/*************************************************************************************************/
+
+static int my_gpio_probe(struct platform_device *pdev)
+{
+	struct raspzero_data *data;
+	int ret;
+
+	data = devm_kzalloc(&pdev->dev, sizeof(*data), GFP_KERNEL);
+	if(!data) {
+		return -ENOMEM;
+	}
+
+	data->led = devm_gpiod_get(&pdev->dev, "led", GPIOD_OUT_LOW);
+	if(IS_ERR(data->led)) {
+		dev_err(&pdev->dev, "Failed to get GPIO\n");
+		return PTR_ERR(data->led);
+	}
+
+	/* Turns GPIO ON */
+	gpiod_set_value(data->led, 1); 
+
+	platform_set_drvdata(pdev, data);
+
+	ret = device_create_file(&pdev->dev, &dev_attr_led);
+	if (ret) {
+		dev_err(&pdev->dev, "Failed to create sysfs attribute\n");
+		return ret;
+	}
+
+	dev_info(&pdev->dev, "mygpio probed\n");
 	return 0;
 }
 
-static void __exit gpio_driver_exit(void)
+/*************************************************************************************************/
+
+static void my_gpio_remove(struct platform_device *pdev)
 {
-	printk("Leaving my driver!\n");
-	iounmap(gpio_registers);
-	proc_remove(lll_proc);
-	return;
+	device_remove_file(&pdev->dev, &dev_attr_led);
+	dev_info(&pdev->dev, "mypgio removed\n");
 }
 
-module_init(gpio_driver_init);
-module_exit(gpio_driver_exit);
+/*************************************************************************************************/
+
+static const struct of_device_id my_gpio_of_match[] = {
+	{ .compatible = "gui,mygpio" },
+	{ }
+};
+
+/*************************************************************************************************/
+
+MODULE_DEVICE_TABLE(of, my_gpio_of_match);
+
+/*************************************************************************************************/
+
+static struct platform_driver my_gpio_driver = {
+	.probe = my_gpio_probe,
+	.remove = my_gpio_remove,
+	.driver = {
+		.name = "mygpio",
+		.of_match_table = my_gpio_of_match,
+	},
+};
+
+/*************************************************************************************************/
+
+module_platform_driver(my_gpio_driver);
+
+/*************************************************************************************************/
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Guilherme Martim");
-MODULE_DESCRIPTION("Test of writing drivers for Rasp zero 2w");
-MODULE_VERSION("1.0");
+MODULE_DESCRIPTION("Custom GPIO driver");

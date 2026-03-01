@@ -5,7 +5,7 @@ PWD  := $(shell pwd)
 
 # Device Tree Overlay
 DTS  := lll_gpio_driver_overlay.dts
-DTBO := lll_gpio_driver.dtbo
+DTBO := mygpio.dtbo
 
 OVERLAY_DIR := $(shell if [ -d /boot/firmware/overlays ]; then \
 	echo /boot/firmware/overlays; \

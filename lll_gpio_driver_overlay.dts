@@ -9,7 +9,7 @@
 		__overlay__ {
 			mygpio: mygpio {
 				compatible = "gui,mygpio";
-				led-gpios = <&gpio 21 0>; //BCM21. active high
+				led-gpios = <&gpio 21 0>;
 				status = "okay";
 			};
 		};
